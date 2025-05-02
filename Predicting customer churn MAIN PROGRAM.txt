@@ -1,0 +1,288 @@
+import pandas as pd
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score, roc_curve
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+
+# 1. Data Loading and Exploration
+def load_and_explore_data(file_path):
+    """
+    Loads data from a CSV file and performs initial exploration.
+
+    Args:
+        file_path (str): Path to the CSV file.
+
+    Returns:
+        pandas.DataFrame: The loaded dataframe, or None if an error occurs.
+    """
+    try:
+        df = pd.read_csv(file_path)
+        print("Data successfully loaded.")
+    except FileNotFoundError:
+        print(f"Error: File not found at {file_path}")
+        return None
+    except Exception as e:
+        print(f"An error occurred while loading the data: {e}")
+        return None
+
+    print("\n--- Initial Data Exploration ---")
+    print(df.head())
+    print("\n--- Data Information ---")
+    print(df.info())
+    print("\n--- Descriptive Statistics ---")
+    print(df.describe())
+    print("\n--- Checking for Missing Values ---")
+    print(df.isnull().sum())
+    return df
+
+# 2. Data Preprocessing
+def preprocess_data(df):
+    """
+    Preprocesses the data for machine learning. Handles missing values,
+    encodes categorical features, and scales numerical features.
+
+    Args:
+        df (pandas.DataFrame): The input dataframe.
+
+    Returns:
+        pandas.DataFrame: The preprocessed dataframe, or None if input is invalid.
+    """
+    if not isinstance(df, pd.DataFrame):
+        print("Error: Input must be a pandas DataFrame.")
+        return None
+
+    df = df.copy()  # Avoid modifying the original DataFrame in place
+
+    # Handle missing values (impute with the median for numerical, mode for categorical)
+    for col in df.select_dtypes(include=np.number).columns:
+        df[col] = df[col].fillna(df[col].median())
+    for col in df.select_dtypes(include='object').columns:
+        df[col] = df[col].fillna(df[col].mode()[0])
+
+    # Encode categorical features (using frequency encoding for high cardinality)
+    for col in df.select_dtypes(include='object').columns:
+        if len(df[col].unique()) > 50:  # Handle high cardinality
+            # Frequency Encoding
+            freq_encoding = df.groupby(col).size() / len(df)
+            df[col] = df[col].map(freq_encoding)
+        else:
+            le = LabelEncoder()
+            df[col] = le.fit_transform(df[col])
+
+    # Scale numerical features
+    scaler = StandardScaler()
+    numerical_cols = df.select_dtypes(include=np.number).columns
+    if len(numerical_cols) > 0:
+        df[numerical_cols] = scaler.fit_transform(df[numerical_cols])
+    else:
+        print("Warning: No numerical columns to scale.")
+
+    return df
+# 3. Feature Selection (Basic Example - Can be expanded)
+def select_features(df, target_column='Churn'):
+    """
+    Selects features and target variable.  This is a placeholder for more
+    advanced feature selection techniques.  It assumes 'Churn' is the target.
+
+    Args:
+        df (pandas.DataFrame): The input dataframe.
+        target_column (str): The name of the target column.
+
+    Returns:
+        tuple: (X, y) - features and target variable, or (None, None) on error.
+    """
+    if not isinstance(df, pd.DataFrame) or target_column not in df.columns:
+        print("Error: Invalid DataFrame or target column not found.")
+        return None, None
+
+    y = df[target_column]
+    X = df.drop(target_column, axis=1)
+    return X, y
+
+# 4. Model Training and Selection
+def train_and_evaluate_model(X_train, y_train, X_test, y_test):
+    """
+    Trains and evaluates multiple machine learning models, performs hyperparameter
+    tuning using GridSearchCV, and selects the best model based on ROC AUC.
+
+    Args:
+        X_train (pandas.DataFrame): Training features.
+        y_train (pandas.Series): Training target variable.
+        X_test (pandas.DataFrame): Testing features.
+        y_test (pandas.Series): Testing target variable.
+
+    Returns:
+        tuple: (best_model, best_model_name) - the best model and its name,
+               or (None, None) if no suitable model is found.
+    """
+    models = {
+        "Logistic Regression": {
+            "model": LogisticRegression(random_state=42),
+            "params": {
+                'C': [0.1, 1, 10],
+                'solver': ['liblinear', 'lbfgs']
+            }
+        },
+        "Random Forest": {
+            "model": RandomForestClassifier(random_state=42),
+            "params": {
+                'n_estimators': [50, 100, 200],
+                'max_depth': [None, 10, 20],
+                'min_samples_split': [2, 5, 10]
+            }
+        },
+        "Gradient Boosting": {
+            "model": GradientBoostingClassifier(random_state=42),
+            "params": {
+                'n_estimators': [50, 100],
+                'learning_rate': [0.01, 0.1],
+                'max_depth': [3, 5]
+            }
+        }
+    }
+
+    best_model = None
+    best_model_name = ""
+    best_auc = 0
+
+    for name, model_data in models.items():
+        print(f"\n--- {name} ---")
+        model = model_data["model"]
+        params = model_data["params"]
+
+        # Use GridSearchCV for hyperparameter tuning
+        grid_search = GridSearchCV(model, params, cv=3, scoring='roc_auc', verbose=0) # Reduced verbosity
+        grid_search.fit(X_train, y_train)
+
+        print("Best Parameters:", grid_search.best_params_)
+        model = grid_search.best_estimator_ #get the best model.
+
+        y_pred = model.predict(X_test)
+        y_pred_proba = model.predict_proba(X_test)[:, 1]  # Probability of class 1
+
+        accuracy = accuracy_score(y_test, y_pred)
+        report = classification_report(y_test, y_pred)
+        auc = roc_auc_score(y_test, y_pred_proba)
+
+        print(f"Accuracy: {accuracy:.4f}")
+        print(f"ROC AUC: {auc:.4f}")
+        print("Classification Report:\n", report)
+
+        #  Confusion Matrix (Added to the output)
+        cm = confusion_matrix(y_test, y_pred)
+        plt.figure(figsize=(6, 4))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+        plt.xlabel('Predicted')
+        plt.ylabel('Actual')
+        plt.title(f'{name} - Confusion Matrix')
+        plt.show()
+
+        # ROC Curve
+        fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
+        plt.figure(figsize=(6, 4))
+        plt.plot(fpr, tpr, label=f'{name} (AUC = {auc:.2f})')
+        plt.plot([0, 1], [0, 1], 'k--')  # Diagonal line
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title(f'{name} - ROC Curve')
+        plt.legend()
+        plt.show()
+
+        if auc > best_auc:
+            best_auc = auc
+            best_model = model
+            best_model_name = name
+
+    if best_model:
+        print(f"\nBest Model: {best_model_name} with ROC AUC = {best_auc:.4f}")
+        return best_model, best_model_name
+    else:
+        print("No suitable model found.")
+        return None, None
+
+# 5. Prediction with the Best Model
+def predict_churn(best_model, X_new):
+    """
+    Predicts churn for new data using the best trained model.
+
+    Args:
+        best_model: The best trained machine learning model.
+        X_new (pandas.DataFrame): New data for prediction.
+
+    Returns:
+        numpy.ndarray: Predicted churn probabilities, or None on error.
+    """
+    if best_model is None:
+        print("Error: No trained model provided.")
+        return None
+
+    try:
+        # Assuming X_new has the same features as the training data
+        predictions = best_model.predict_proba(X_new)[:, 1]  # Probability of churn
+        return predictions
+    except Exception as e:
+        print(f"Error during prediction: {e}")
+        return None
+
+def main():
+    """
+    Main function to orchestrate the churn prediction process.
+    """
+    # 1. Load and Explore Data
+    file_path = "customer_churn.csv"  # Replace with your actual file path
+    df = load_and_explore_data(file_path)
+    if df is None:
+        return  # Exit if data loading failed
+
+    # 2. Preprocess Data
+    df = preprocess_data(df)
+    if df is None:
+        return
+
+    # 3. Feature Selection
+    X, y = select_features(df, target_column='Churn')
+    if X is None or y is None:
+        return
+
+    # 4. Split Data
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    # 5. Train and Evaluate Model
+    best_model, best_model_name = train_and_evaluate_model(X_train, y_train, X_test, y_test)
+    if best_model is None:
+        return
+
+    # 6.  Example of making predictions on new data
+    # Create a sample new data DataFrame (replace with your actual new data)
+    new_data = pd.DataFrame({
+        'Age': [50, 60, 45],
+        'Gender': ['Male', 'Female', 'Male'],
+        'Total_Purchase': [1000, 1500, 800],
+        'Transactions': [10, 15, 8],
+        'Days_Since_Last_Purchase': [30, 60, 15],
+        'Subscription_Status': ['Active', 'Inactive', 'Active'],
+        'Credit_Score': [700, 650, 720],
+        'Customer_Service_Calls': [2, 1, 3],
+        'Monthly_Spend': [50, 75, 40],
+        'Tenure': [24, 36, 12]
+    })
+    new_data = preprocess_data(new_data) # Preprocess the new data
+    if new_data is not None:
+        predictions = predict_churn(best_model, new_data)
+        if predictions is not None:
+            print("\n--- Predictions for New Data ---")
+            for i, prob in enumerate(predictions):
+                print(f"Customer {i+1}: Churn Probability = {prob:.4f}")
+        else:
+            print("Failed to generate predictions for new data.")
+    else:
+        print("Failed to preprocess new data.")
+    print("End")
+
+if __name__ == "__main__":
+    main()
+
